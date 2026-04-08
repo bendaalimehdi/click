@@ -49,66 +49,46 @@ bool LeaderService::begin() {
 }
 
 void LeaderService::maintainWiFi() {
-    const uint32_t retryIntervalMs = 10000;
-
-    if (_cfg.wifi_ssid.isEmpty()) {
-        return;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        return;
-    }
-
-    if (millis() - _lastWiFiRetryMs < retryIntervalMs) {
-        return;
-    }
+    const uint32_t retryIntervalMs = 15000;
+    if (_cfg.wifi_ssid.isEmpty() || WiFi.status() == WL_CONNECTED) return;
+    if (millis() - _lastWiFiRetryMs < retryIntervalMs) return;
 
     _lastWiFiRetryMs = millis();
-
-    Logger::warn("WiFi disconnected, reconnecting STA...");
-    WiFi.disconnect(false, false);
+    Logger::warn("WiFi disconnected, reconnecting...");
     WiFi.begin(_cfg.wifi_ssid.c_str(), _cfg.wifi_pass.c_str());
 }
 
 void LeaderService::setupWiFi() {
-    WiFi.persistent(false); // Prevent flash wear and potential config corruption
+    WiFi.persistent(false);
     WiFi.mode(WIFI_AP_STA);
-
     if (WiFi.softAP(_cfg.ap_ssid.c_str(), _cfg.ap_pass.c_str())) {
         Logger::info("AP IP: " + WiFi.softAPIP().toString());
     }
-
     if (!_cfg.wifi_ssid.isEmpty()) {
         WiFi.begin(_cfg.wifi_ssid.c_str(), _cfg.wifi_pass.c_str());
-        // Increase timeout to 20 seconds for slower routers
     }
 }
+
 void LeaderService::setupApPortal() {
     _portal.begin(
         _cfg,
-        [this](const AppConfig& newCfg) -> bool {
-            return saveConfig(newCfg);
-        },
-        [this]() -> std::vector<NodeRecord> {
-            return getNodes();
-        },
-        [this]() -> PortalStatus {
-            return getPortalStatus();
-        }
+        [this](const AppConfig& newCfg) -> bool { return saveConfig(newCfg); },
+        [this]() -> std::vector<NodeRecord> { return getNodes(); },
+        [this]() -> PortalStatus { return getPortalStatus(); }
     );
 }
 
 void LeaderService::loop() {
     maintainWiFi();
-    static uint32_t lastCleanup = 0;
     
-
-    if (millis() - lastCleanup > 30000) {
+    static uint32_t lastCleanup = 0;
+    if (millis() - lastCleanup > 60000) { // Nettoyage toutes les minutes
         lastCleanup = millis();
-
         for (auto it = _nodes.begin(); it != _nodes.end();) {
+            // Suppression des nœuds non vus depuis 24h
             if (millis() - it->lastSeenMs > 24UL * 3600UL * 1000UL) {
                 it = _nodes.erase(it);
+                _nodesDirty = true; 
             } else {
                 ++it;
             }
@@ -121,14 +101,7 @@ void LeaderService::loop() {
 
 void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& packet) {
     String macStr = EspNowManager::macBytesToString(mac);
-
-    Logger::info(
-        "RX " + macStr +
-        " client=" + String(packet.client) +
-        " id=" + String(packet.id) +
-        " temp=" + String(packet.temp, 2) +
-        " volt=" + String(packet.volt, 2)
-    );
+    Logger::info("RX " + macStr + " id=" + String(packet.id) + " temp=" + String(packet.temp, 2));
 
     NodeRecord* node = findNodeById(packet.id);
     if (!node) {
@@ -140,41 +113,69 @@ void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& pac
         newNode.lastSeenMs = millis();
         newNode.mac = macStr;
         _nodes.push_back(newNode);
+        _nodesDirty = true;
     } else {
         node->client = packet.client;
         node->temp = packet.temp;
         node->volt = packet.volt;
         node->lastSeenMs = millis();
         node->mac = macStr;
+        _nodesDirty = true;
     }
 
+    // Réponse de synchronisation
     SyncData sync;
     sync.next_sleep_seconds = _time.secondsUntilNextSlot(_cfg.report_times);
-
     _espnow.addPeer(mac);
-    if (!_espnow.sendSyncData(mac, sync)) {
-        Logger::warn("Failed to send SyncData to " + macStr);
-        _errors.setLastError("Failed to send SyncData");
-    }
+    _espnow.sendSyncData(mac, sync);
 
-    bool posted = _cloud.postSensorData(packet, mac, _cfg.leader_mac, _cfg.device_name);
-    if (!posted) {
-        Logger::warn("Cloud POST failed: " + _cloud.getLastError());
+    // Envoi Cloud ou mise en file d'attente
+    if (!_cloud.postSensorData(packet, mac, _cfg.leader_mac, _cfg.device_name)) {
+        Logger::warn("Cloud POST failed, queuing data");
         _errors.setLastError(_cloud.getLastError());
-
-        if (_queue.enqueueFromSensorData(packet)) {
-            Logger::info("Payload queued to LittleFS");
-        } else {
-            Logger::error("Queue append failed: " + _queue.getLastError());
-            _errors.setLastError(_queue.getLastError());
-        }
+        _queue.enqueueFromSensorData(packet);
     } else {
         _errors.clear();
     }
+}
 
-    if (!_state.saveNodes(_nodes)) {
-        Logger::warn("Immediate state save failed: " + _state.getLastError());
+void LeaderService::persistLeaderStateIfNeeded() {
+    const uint32_t saveIntervalMs = 60000; // Max une écriture par minute
+    if (!_nodesDirty || (millis() - _lastStateSaveMs < saveIntervalMs)) return;
+
+    _lastStateSaveMs = millis();
+    if (_state.saveNodes(_nodes)) {
+        Logger::info("Nodes persisted to LittleFS");
+        _nodesDirty = false;
+    } else {
         _errors.setLastError(_state.getLastError());
+    }
+}
+
+void LeaderService::retryQueuedCloudPosts() {
+    const uint32_t retryIntervalMs = 30000;
+    if (millis() - _lastQueueRetryMs < retryIntervalMs) return;
+    _lastQueueRetryMs = millis();
+
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    std::vector<QueuedCloudItem> items;
+    if (!_queue.loadAll(items) || items.empty()) return;
+
+    Logger::info("Retrying " + String(items.size()) + " queued items");
+    bool changed = false;
+
+    while (!items.empty()) {
+        if (_cloud.postQueuedItem(items.front())) {
+            items.erase(items.begin());
+            changed = true;
+        } else {
+            break; // Arrêt si le serveur est toujours indisponible
+        }
+    }
+
+    if (changed) {
+        _queue.rewriteAll(items);
     }
 }
 
@@ -185,9 +186,7 @@ NodeRecord* LeaderService::findNodeById(int id) {
     return nullptr;
 }
 
-std::vector<NodeRecord> LeaderService::getNodes() const {
-    return _nodes;
-}
+std::vector<NodeRecord> LeaderService::getNodes() const { return _nodes; }
 
 bool LeaderService::saveConfig(const AppConfig& cfg) {
     ConfigManager cm;
@@ -200,73 +199,4 @@ PortalStatus LeaderService::getPortalStatus() const {
     st.queueSize = const_cast<CloudQueueManager&>(_queue).size();
     st.lastError = _errors.getLastError();
     return st;
-}
-
-void LeaderService::retryQueuedCloudPosts() {
-    const uint32_t retryIntervalMs = 15000;
-    if (millis() - _lastQueueRetryMs < retryIntervalMs) return;
-    _lastQueueRetryMs = millis();
-
-    if (WiFi.status() != WL_CONNECTED) {
-        Logger::warn("Retry skipped: WiFi not connected");
-        return;
-    }
-
-    std::vector<QueuedCloudItem> items;
-    if (!_queue.loadAll(items)) {
-        Logger::warn("Queue load failed: " + _queue.getLastError());
-        _errors.setLastError(_queue.getLastError());
-        return;
-    }
-
-    if (items.empty()) return;
-
-    Logger::info("Retry queue start, items=" + String(items.size()));
-
-    bool changed = false;
-    size_t sentCount = 0;
-
-    while (!items.empty()) {
-        QueuedCloudItem& item = items.front();
-
-        if (_cloud.postQueuedItem(item)) {
-            Logger::info("Queued payload sent for node " + String(item.node));
-            items.erase(items.begin());
-            changed = true;
-            sentCount++;
-        } else {
-            item.retryCount++;
-            Logger::warn(
-                "Queued payload failed for node " + String(item.node) +
-                ", retryCount=" + String(item.retryCount) +
-                ", err=" + _cloud.getLastError()
-            );
-            _errors.setLastError(_cloud.getLastError());
-            changed = true;
-            break;
-        }
-    }
-
-    if (changed) {
-        if (!_queue.rewriteAll(items)) {
-            Logger::error("Queue rewrite failed: " + _queue.getLastError());
-            _errors.setLastError(_queue.getLastError());
-        }
-    }
-
-    if (sentCount > 0 && items.empty()) {
-        Logger::info("Queue fully flushed");
-        _errors.clear();
-    }
-}
-
-void LeaderService::persistLeaderStateIfNeeded() {
-    const uint32_t saveIntervalMs = 60000;
-    if (millis() - _lastStateSaveMs < saveIntervalMs) return;
-    _lastStateSaveMs = millis();
-
-    if (!_state.saveNodes(_nodes)) {
-        Logger::warn("Periodic state save failed: " + _state.getLastError());
-        _errors.setLastError(_state.getLastError());
-    }
 }

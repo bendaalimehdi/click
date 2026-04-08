@@ -7,7 +7,7 @@
 struct GpioPinsConfig {
     int i2c_sda = 7;
     int i2c_scl = 6;
-    int battery_adc = 10;
+    int battery_adc = 5;
 };
 
 struct BatteryConfig {

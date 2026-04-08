@@ -1,7 +1,7 @@
 {
-  "role": "follower",
-  "id": 2,
-  "device_name": "follower-1",
+  "role": "leader",
+  "id": 1,
+  "device_name": "leader-1",
   "wifi_ssid": "BboxM",
   "wifi_pass": "Midi2210@bbox",
   "server_url": "http://192.168.1.119:5000/api/fridge",

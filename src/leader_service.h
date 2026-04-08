@@ -39,6 +39,8 @@ private:
     uint32_t _lastQueueRetryMs = 0;
     uint32_t _lastStateSaveMs = 0;
 
+    bool _nodesDirty = false;
+
     void setupWiFi();
     void setupApPortal();
     void handleSensorPacket(const uint8_t* mac, const SensorData& packet);
