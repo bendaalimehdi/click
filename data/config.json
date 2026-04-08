@@ -1,0 +1,30 @@
+{
+  "role": "follower",
+  "id": 2,
+  "device_name": "follower-1",
+  "wifi_ssid": "BboxM",
+  "wifi_pass": "Midi2210@bbox",
+  "server_url": "http://192.168.1.119:5000/api/fridge",
+  "leader_mac": "10:51:DB:1C:43:9C",
+  "timezone": "CET-1CEST,M3.5.0/2,M10.5.0/3",
+  "gpio_pins": {
+    "i2c_sda": 6,
+    "i2c_scl": 7,
+    "battery_adc": 5
+  },
+  "report_times": [
+    "10:00",
+    "22:00"
+  ],
+  "follower_wait_sync_ms": 500,
+  "ap_ssid": "MANAGER_LEADER",
+  "ap_pass": "12345678",
+  "sensor_type": "bmp280",
+  "battery": {
+    "divider_r1": 1000000.0,
+    "divider_r2": 1000000.0,
+    "adc_vref": 3.3,
+    "adc_max": 4095.0,
+    "calibration_factor": 1.0
+  }
+}
