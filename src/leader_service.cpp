@@ -1,5 +1,6 @@
 #include "leader_service.h"
 #include "config_manager.h"
+#include "protocol_types.h"
 #include "logger.h"
 #include <WiFi.h>
 
@@ -37,8 +38,17 @@ bool LeaderService::begin() {
         return false;
     }
 
+    // Handler mis à jour pour traiter différents types de paquets
     _espnow.onSensorReceived([this](const uint8_t* mac, const SensorData& packet) {
-        handleSensorPacket(mac, packet);
+        // On vérifie le type de message (Cast car le buffer brut est reçu)
+        uint8_t msgType = ((uint8_t*)&packet)[0]; 
+
+        if (msgType == MSG_SENSOR_DATA) {
+            handleSensorPacket(mac, packet);
+        } 
+        else if (msgType == MSG_PAIRING_REQ) {
+            handlePairingRequest(mac, (PairingHello*)&packet);
+        }
     });
 
     setupApPortal();
@@ -51,9 +61,10 @@ bool LeaderService::begin() {
 void LeaderService::maintainWiFi() {
     const uint32_t retryIntervalMs = 15000;
     if (_cfg.wifi_ssid.isEmpty() || WiFi.status() == WL_CONNECTED) return;
+    
     if (millis() - _lastWiFiRetryMs < retryIntervalMs) return;
-
     _lastWiFiRetryMs = millis();
+
     Logger::warn("WiFi disconnected, reconnecting...");
     WiFi.begin(_cfg.wifi_ssid.c_str(), _cfg.wifi_pass.c_str());
 }
@@ -61,9 +72,12 @@ void LeaderService::maintainWiFi() {
 void LeaderService::setupWiFi() {
     WiFi.persistent(false);
     WiFi.mode(WIFI_AP_STA);
+    
+    // Fixer le canal WiFi est crucial pour que ESP-NOW fonctionne avec les followers
     if (WiFi.softAP(_cfg.ap_ssid.c_str(), _cfg.ap_pass.c_str())) {
         Logger::info("AP IP: " + WiFi.softAPIP().toString());
     }
+
     if (!_cfg.wifi_ssid.isEmpty()) {
         WiFi.begin(_cfg.wifi_ssid.c_str(), _cfg.wifi_pass.c_str());
     }
@@ -81,14 +95,14 @@ void LeaderService::setupApPortal() {
 void LeaderService::loop() {
     maintainWiFi();
     
+    // Nettoyage des nœuds expirés (24h)
     static uint32_t lastCleanup = 0;
-    if (millis() - lastCleanup > 60000) { // Nettoyage toutes les minutes
+    if (millis() - lastCleanup > 60000) { 
         lastCleanup = millis();
         for (auto it = _nodes.begin(); it != _nodes.end();) {
-            // Suppression des nœuds non vus depuis 24h
             if (millis() - it->lastSeenMs > 24UL * 3600UL * 1000UL) {
                 it = _nodes.erase(it);
-                _nodesDirty = true; 
+                _nodesDirty = true; // Marqué pour sauvegarde
             } else {
                 ++it;
             }
@@ -101,7 +115,7 @@ void LeaderService::loop() {
 
 void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& packet) {
     String macStr = EspNowManager::macBytesToString(mac);
-    Logger::info("RX " + macStr + " id=" + String(packet.id) + " temp=" + String(packet.temp, 2));
+    Logger::info("Data from " + macStr + " id=" + String(packet.id) + " temp=" + String(packet.temp, 2));
 
     NodeRecord* node = findNodeById(packet.id);
     if (!node) {
@@ -123,15 +137,16 @@ void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& pac
         _nodesDirty = true;
     }
 
-    // Réponse de synchronisation
+    // Réponse de synchronisation pour le sommeil
     SyncData sync;
+    sync.type = MSG_SYNC_DATA;
     sync.next_sleep_seconds = _time.secondsUntilNextSlot(_cfg.report_times);
     _espnow.addPeer(mac);
     _espnow.sendSyncData(mac, sync);
 
-    // Envoi Cloud ou mise en file d'attente
+    // Envoi au Cloud
     if (!_cloud.postSensorData(packet, mac, _cfg.leader_mac, _cfg.device_name)) {
-        Logger::warn("Cloud POST failed, queuing data");
+        Logger::warn("Cloud failed, data queued");
         _errors.setLastError(_cloud.getLastError());
         _queue.enqueueFromSensorData(packet);
     } else {
@@ -139,13 +154,21 @@ void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& pac
     }
 }
 
+void LeaderService::handlePairingRequest(const uint8_t* mac, PairingHello* msg) {
+    String macStr = EspNowManager::macBytesToString(mac);
+    Logger::info("Provisioning request from: " + macStr);
+    
+    // Ici, vous stockeriez l'info dans une map _discoveredList 
+    // pour l'afficher sur le portail Web (Installation Mode)
+}
+
 void LeaderService::persistLeaderStateIfNeeded() {
-    const uint32_t saveIntervalMs = 60000; // Max une écriture par minute
+    const uint32_t saveIntervalMs = 60000; 
     if (!_nodesDirty || (millis() - _lastStateSaveMs < saveIntervalMs)) return;
 
     _lastStateSaveMs = millis();
     if (_state.saveNodes(_nodes)) {
-        Logger::info("Nodes persisted to LittleFS");
+        Logger::info("State auto-saved to LittleFS");
         _nodesDirty = false;
     } else {
         _errors.setLastError(_state.getLastError());
@@ -162,15 +185,16 @@ void LeaderService::retryQueuedCloudPosts() {
     std::vector<QueuedCloudItem> items;
     if (!_queue.loadAll(items) || items.empty()) return;
 
-    Logger::info("Retrying " + String(items.size()) + " queued items");
+    Logger::info("Retry queue: " + String(items.size()) + " items");
     bool changed = false;
 
-    while (!items.empty()) {
-        if (_cloud.postQueuedItem(items.front())) {
-            items.erase(items.begin());
+    // Utilisation d'un itérateur sécurisé
+    for (auto it = items.begin(); it != items.end(); ) {
+        if (_cloud.postQueuedItem(*it)) {
+            it = items.erase(it);
             changed = true;
         } else {
-            break; // Arrêt si le serveur est toujours indisponible
+            break; // Serveur toujours HS, on arrête pour ce cycle
         }
     }
 

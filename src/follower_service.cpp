@@ -1,5 +1,6 @@
 #include "follower_service.h"
 #include "logger.h"
+#include "config_manager.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 
@@ -11,11 +12,73 @@ FollowerService::FollowerService(const AppConfig& cfg)
 bool FollowerService::beginAndSleep() {
     uint32_t bootMs = millis();
 
+    // 1. Initialisation matérielle de base
+    _battery.begin();
+    
+    // 2. Vérification du mode d'entrée
+    // Utilisation du GPIO 9 (Bouton BOOT sur Super Mini C6) pour forcer le setup
+    pinMode(9, INPUT_PULLUP);
+    bool forceInstall = (digitalRead(9) == LOW);
+    
+    // Si la configuration est incomplète ou si le bouton est pressé, passer en mode Installation
+    if (_cfg.leader_mac.isEmpty() || _cfg.leader_mac == "00:00:00:00:00:00" || forceInstall) {
+        return runInstallMode();
+    }
+
+    // 3. Mode de fonctionnement normal (RUN_MODE)
+    return runNormalMode(bootMs);
+}
+
+bool FollowerService::runInstallMode() {
+    Logger::info(">>> MODE INSTALLATION ACTIF <<<");
+    Logger::info("En attente de configuration via le Leader...");
+
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+
+    if (!_espnow.begin()) {
+        Logger::error("Erreur ESP-NOW en mode Install");
+        delay(5000);
+        ESP.restart();
+        return false;
+    }
+
+    // Callback pour intercepter les messages de provisioning
+    // Note : Cette partie nécessite que EspNowManager gère le type MSG_PROVISION
+    _espnow.onSyncReceived([this](const uint8_t* mac, const SyncData& sync) {
+        // Logique de réception de configuration via ESP-NOW
+        // Une fois la config reçue, on sauvegarde et on redémarre
+    });
+
+    uint32_t lastBeacon = 0;
+    while (true) {
+        // Envoi d'un signal "PairingHello" toutes les 3 secondes
+        if (millis() - lastBeacon > 3000) {
+            lastBeacon = millis();
+            
+            PairingHello hello;
+            strlcpy(hello.uid, WiFi.macAddress().c_str(), sizeof(hello.uid));
+            strlcpy(hello.firmware, "1.1.0", sizeof(hello.firmware));
+            strlcpy(hello.sensor_type, _cfg.sensor_type.c_str(), sizeof(hello.sensor_type));
+            hello.battery_voltage = _battery.readVoltage();
+
+            // Envoi en broadcast (FF:FF:FF:FF:FF:FF) pour être détecté par le Leader
+            uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            _espnow.sendSensorData(broadcastMac, *((SensorData*)&hello)); 
+            
+            Logger::info("PairingHello envoyé pour détection...");
+        }
+
+        // Petit clignotement LED optionnel pour indiquer le mode installation
+        // yield() pour éviter le watchdog
+        delay(10);
+    }
+}
+
+bool FollowerService::runNormalMode(uint32_t bootMs) {
     if (!_sensor.begin()) {
         Logger::warn("Sensor init failed: " + _sensor.getLastError());
     }
-
-    _battery.begin();
 
     float temp = _sensor.readTemperatureC();
     float volt = _battery.readVoltage();
@@ -27,20 +90,18 @@ bool FollowerService::beginAndSleep() {
 
     if (!_espnow.begin()) {
         Logger::error("Follower: ESP-NOW init failed");
-        enterDeepSleep(12UL * 3600UL);
+        enterDeepSleep(60UL);
         return false;
     }
 
     uint8_t leaderMac[6];
     if (!EspNowManager::macStringToBytes(_cfg.leader_mac, leaderMac)) {
         Logger::error("Follower: invalid leader MAC");
-        enterDeepSleep(12UL * 3600UL);
+        enterDeepSleep(60UL);
         return false;
     }
 
-    if (!_espnow.addPeer(leaderMac)) {
-        Logger::warn("Follower: addPeer failed or peer not accepted");
-    }
+    _espnow.addPeer(leaderMac);
 
     _espnow.onSyncReceived([this](const uint8_t* mac, const SyncData& packet) {
         (void)mac;
@@ -48,12 +109,14 @@ bool FollowerService::beginAndSleep() {
         _syncReceived = true;
     });
 
+    // Préparation du message DATA standard
     SensorData payload = {};
+    payload.type = MSG_SENSOR_DATA; // Nouveau champ
     strlcpy(payload.client, _cfg.device_name.c_str(), sizeof(payload.client));
     payload.id = _cfg.id;
     payload.temp = temp;
     payload.volt = volt;
-    payload.count = 1; // Ou un compteur stocké en RTC
+    payload.count = 1;
     payload.rssi = WiFi.RSSI();
 
     bool sent = _espnow.sendSensorData(leaderMac, payload);
@@ -64,7 +127,7 @@ bool FollowerService::beginAndSleep() {
     uint32_t awake = millis() - bootMs;
     Logger::info("Awake time ms=" + String(awake));
 
-    enterDeepSleep(_syncReceived ? _syncData.next_sleep_seconds : 12UL * 3600UL);
+    enterDeepSleep(_syncReceived ? _syncData.next_sleep_seconds : 60UL);
     return true;
 }
 
@@ -77,7 +140,6 @@ bool FollowerService::waitForSync(uint32_t timeoutMs) {
         }
         delay(5);
     }
-
     Logger::warn("No SyncData received, fallback sleep");
     return false;
 }
