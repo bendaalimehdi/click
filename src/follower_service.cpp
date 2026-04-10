@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <esp_sleep.h>
+#include <ArduinoJson.h>
 
 FollowerService::FollowerService(const AppConfig& cfg)
     : _cfg(cfg),
@@ -32,8 +33,6 @@ bool FollowerService::beginAndSleep() {
 
 bool FollowerService::runInstallMode() {
     Logger::info(">>> MODE INSTALLATION ACTIF <<<");
-    Logger::info("En attente de configuration via le Leader...");
-
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
@@ -45,34 +44,61 @@ bool FollowerService::runInstallMode() {
         return false;
     }
 
-    // Ajouter explicitement le peer broadcast
     uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    bool peerOk = _espnow.addPeer(broadcastMac, 1, false);
-    Logger::info(peerOk ? "Broadcast peer OK" : "Broadcast peer FAIL");
+    _espnow.addPeer(broadcastMac, 1, false);
 
-   _espnow.onSyncReceived([this](const uint8_t* mac, const SyncData& packet) {
-    const uint8_t* raw = (const uint8_t*)&packet;
-    uint8_t type = raw[0];
-    
-    if (type == MSG_PROVISION) {
-        ProvisionConfigMsg* msg = (ProvisionConfigMsg*)raw;
-        Logger::info("PROVISION REÇU ! Leader MAC: " + String(msg->leader_mac));
-        
-        
-        // Mise à jour de la config en mémoire
-        _cfg.leader_mac = String(msg->leader_mac);
-        _cfg.device_name = String(msg->device_name);
-        _cfg.role = "follower";
+    _espnow.onRawReceived([this](const uint8_t* mac, const uint8_t* data, size_t len) -> void {
+        (void)mac;
 
-        // Sauvegarde physique sur LittleFS
+        if (!data || len == 0) {
+            Logger::warn("Provisioning ignore: payload vide");
+            return;
+        }
+
+        if (data[0] == '{') {
+            Logger::info("Provision payload recu: " + String(reinterpret_cast<const char*>(data)));
+        }
+
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, data, len);
+        if (err) {
+            Logger::warn(String("Provisioning ignore: JSON invalide - ") + err.c_str());
+            return;
+        }
+
+        String type = doc["type"] | "";
+        if (type != "provision") {
+            return;
+        }
+
+        String receivedMac = doc["leader_mac"] | "";
+        String receivedName = doc["device_name"] | "";
+        String receivedRole = doc["role"] | "follower";
+
+        if (receivedMac.length() < 17 || receivedName.isEmpty()) {
+            Logger::error("Provisioning ignore: Donnees invalides");
+            return;
+        }
+
+        Logger::info("PROVISION VALIDE ! Leader: " + receivedMac);
+
+        this->_cfg.leader_mac = receivedMac;
+        this->_cfg.device_name = receivedName;
+        this->_cfg.role = receivedRole;
+
+        if (doc["channel"].is<int>()) {
+            Logger::info("Channel recu: " + String((int)doc["channel"]));
+        }
+
         ConfigManager cm;
-        if (cm.begin() && cm.save(_cfg)) {
-            Logger::info("Config sauvegardée. Redémarrage...");
+        if (cm.begin() && cm.save(this->_cfg)) {
+            Logger::info("Config sauvegardee. Reboot...");
             delay(2000);
             ESP.restart();
+        } else {
+            Logger::error("Echec sauvegarde config");
         }
-    }
-});
+    });
 
     uint32_t lastBeacon = 0;
     while (true) {
@@ -86,17 +112,12 @@ bool FollowerService::runInstallMode() {
             strlcpy(hello.sensor_type, _cfg.sensor_type.c_str(), sizeof(hello.sensor_type));
             hello.battery_voltage = _battery.readVoltage();
 
-            bool sent = _espnow.sendRaw(
-                broadcastMac,
-                reinterpret_cast<const uint8_t*>(&hello),
-                sizeof(hello)
-            );
-
-            Logger::info(sent ? "PairingHello SEND OK" : "PairingHello SEND FAIL");
+            _espnow.sendRaw(broadcastMac, (const uint8_t*)&hello, sizeof(hello));
+            Logger::info("PairingHello sent");
         }
-
         delay(10);
     }
+
     return true;
 }
 

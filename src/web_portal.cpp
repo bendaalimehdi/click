@@ -81,20 +81,26 @@ void WebPortal::setupRoutes() {
 
 
 
-    _server.on("/api/provision/apply", HTTP_POST, [this](AsyncWebServerRequest* request) {
-        if (request->hasParam("mac") && request->hasParam("name")) {
-            // ON RÉCUPÈRE LES STRINGS ICI
-            String mac = request->getParam("mac")->value();
-            String name = request->getParam("name")->value();
-            
-            // On les passe au callback
-            if (_provisionCb && _provisionCb(mac, name)) { // Utilise les variables 'mac' et 'name' créées juste au dessus
-                request->send(200, "text/plain", "OK");
-            } else {
-                request->send(500, "text/plain", "Error");
-            }
+   _server.on("/api/provision/apply", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (request->hasParam("mac") && request->hasParam("name")) {
+        String targetMac = request->getParam("mac")->value();
+        String nodeName = request->getParam("name")->value();
+        
+        // On récupère aussi la MAC du leader si elle est passée, 
+        // sinon on utilise notre propre adresse MAC par défaut
+        String leaderMac = request->hasParam("leader") ? 
+                           request->getParam("leader")->value() : WiFi.macAddress();
+
+        Logger::info("Provisioning request for " + targetMac + " with name: " + nodeName);
+
+        // On appelle provisionNode avec tous les paramètres
+        if (_provisionCb && _provisionCb(targetMac, nodeName)) {
+            request->send(200, "text/plain", "OK");
+        } else {
+            request->send(500, "text/plain", "Error");
         }
-    });
+    }
+});
 
 
     _server.on("/save", HTTP_POST, [this](AsyncWebServerRequest* request) {
@@ -121,73 +127,134 @@ String WebPortal::htmlPage() {
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Fridge Leader</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fridge Leader Portal</title>
     <style>
-        /* ... tes styles ... */
-        .detected-row { background: #fffde7; }
+        body { font-family: sans-serif; background: #f4f7f9; color: #333; padding: 20px; }
+        .container { max-width: 900px; margin: auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h2 { color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #eee; }
+        .status-item { margin: 5px 0; }
+        .input-small { padding: 5px; border: 1px solid #ccc; border-radius: 4px; width: 140px; }
+        .btn { background: #3498db; color: white; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; }
+        .btn-red { background: #e74c3c; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 8px; box-sizing: border-box; }
     </style>
 </head>
 <body>
 <div class="container">
     <div class="card">
+        <h2>Leader Status</h2>
+        <div class="status-item"><span>Device MAC:</span> <b id="deviceMac">--:--</b></div>
+        <div class="status-item"><span>Queue size:</span> <span id="queueSize">0</span></div>
+        <div class="status-item"><span>Last error:</span> <span id="lastError">none</span></div>
+    </div>
+
+    <div class="card">
         <h2>Nouveaux Capteurs détectés</h2>
         <table>
-            <thead><tr><th>MAC</th><th>Batt</th><th>Type</th><th>Nom à donner</th><th>Action</th></tr></thead>
+            <thead><tr><th>MAC</th><th>Batt</th><th>Type</th><th>Nom / MAC Leader</th><th>Action</th></tr></thead>
             <tbody id="provision-list"></tbody>
         </table>
     </div>
+
+    <div class="card">
+        <h2>Follower Dashboard</h2>
+        <table>
+            <thead><tr><th>UID</th><th>Nom</th><th>Temp</th><th>Volt</th><th>Action</th></tr></thead>
+            <tbody id="nodes-list"></tbody>
+        </table>
     </div>
 
+    <div class="card">
+        <h2>Configuration WiFi & Leader</h2>
+        <form action="/save" method="POST">
+            <div class="form-group">
+                <label>Nom du Leader :</label>
+                <input type="text" name="device_name" value=")HTML" + _cfg.device_name + R"HTML(">
+            </div>
+            <div class="form-group">
+                <label>WiFi SSID :</label>
+                <input type="text" name="wifi_ssid" value=")HTML" + _cfg.wifi_ssid + R"HTML(">
+            </div>
+            <div class="form-group">
+                <label>WiFi Password :</label>
+                <input type="password" name="wifi_pass" value=")HTML" + _cfg.wifi_pass + R"HTML(">
+            </div>
+            <button type="submit" class="btn">Enregistrer & Sauvegarder</button>
+        </form>
+    </div>
+</div>
+
 <script>
-// Empêcher le rafraîchissement si l'utilisateur écrit
 let isTyping = false;
 
-async function applyConfig(mac) {
-    const name = document.getElementById('n-' + mac).value;
-    if(!name) { alert("Donnez un nom !"); return; }
-    
-    const btn = document.querySelector(`button[onclick="applyConfig('${mac}')"]`);
-    btn.disabled = true;
-    btn.innerText = "Envoi...";
-
+async function refreshData() {
+    if (isTyping) return;
     try {
-        const res = await fetch(`/api/provision/apply?mac=${mac}&name=${name}`, { method: 'POST' });
-        if(res.ok) {
-            alert("Configuration envoyée ! Le capteur va redémarrer.");
-            refreshProvisioning();
-        } else {
-            alert("Erreur lors de l'envoi");
-        }
-    } catch(e) { alert("Erreur réseau"); }
-    btn.disabled = false;
-    btn.innerText = "Installer";
-}
+        // Status
+        const resSt = await fetch('/api/status');
+        const st = await resSt.json();
+        document.getElementById('deviceMac').innerText = st.device_mac;
+        document.getElementById('queueSize').innerText = st.queue_size;
+        document.getElementById('lastError').innerText = st.last_error || "none";
 
-async function refreshProvisioning() {
-    if (isTyping) return; // Stop refresh pendant la saisie
-    try {
-        const res = await fetch('/api/provision/list');
-        const data = await res.json();
-        const tbody = document.getElementById('provision-list');
-        
-        // On ne reconstruit que si le nombre de devices change ou si vide
-        let html = "";
-        data.forEach(f => {
-            html += `
-                <tr class="detected-row">
-                    <td>${f.mac}</td>
-                    <td>${f.volt}V</td>
-                    <td>${f.sensor}</td>
-                    <td><input type="text" id="n-${f.mac}" onfocus="isTyping=true" onblur="isTyping=false" class="input-small"></td>
-                    <td><button class="btn" onclick="applyConfig('${f.mac}')">Installer</button></td>
-                </tr>`;
+        // Provisioning List (Appelle /api/provision/apply)
+        const resProv = await fetch('/api/provision/list');
+        const provs = await resProv.json();
+        let provHtml = "";
+        provs.forEach(p => {
+            provHtml += `<tr>
+                <td>${p.mac}</td>
+                <td>${p.volt}V</td>
+                <td>${p.sensor}</td>
+                <td>
+                    <input type="text" id="name-${p.mac}" placeholder="Nom" class="input-small" onfocus="isTyping=true" onblur="isTyping=false">
+                    <input type="text" id="lmac-${p.mac}" value="${st.device_mac}" class="input-small">
+                </td>
+                <td><button class="btn" onclick="applyProvision('${p.mac}')">Installer</button></td>
+            </tr>`;
         });
-        if(html === "") html = "<tr><td colspan='5'>Aucun nouveau capteur...</td></tr>";
-        tbody.innerHTML = html;
+        document.getElementById('provision-list').innerHTML = provHtml || "<tr><td colspan='5'>Rien détecté</td></tr>";
+
+        // Nodes List
+        const resNodes = await fetch('/api/nodes');
+        const nodes = await resNodes.json();
+        let nodesHtml = "";
+        nodes.forEach(n => {
+            nodesHtml += `<tr>
+                <td>${n.id}</td>
+                <td><b>${n.client}</b></td>
+                <td>${n.temp}°C</td>
+                <td>${n.volt}V</td>
+                <td><button class="btn btn-red">Supprimer</button></td>
+            </tr>`;
+        });
+        document.getElementById('nodes-list').innerHTML = nodesHtml || "<tr><td colspan='5'>Aucun follower</td></tr>";
     } catch(e) {}
 }
 
-setInterval(refreshProvisioning, 3000);
+async function applyProvision(mac) {
+    const name = document.getElementById('name-' + mac).value;
+    const leader = document.getElementById('lmac-' + mac).value;
+    if(!name) { alert("Nom requis"); return; }
+    
+    // Appel à l'API de provisionnement
+    const res = await fetch(`/api/provision/apply?mac=${mac}&name=${name}&leader=${leader}`, { method: 'POST' });
+    if(res.ok) {
+        alert("Configuration envoyée au follower !");
+        refreshData();
+    } else {
+        alert("Erreur d'envoi");
+    }
+}
+
+setInterval(refreshData, 3000);
+window.onload = refreshData;
 </script>
 </body>
 </html>

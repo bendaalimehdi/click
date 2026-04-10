@@ -3,6 +3,7 @@
 #include "protocol_types.h"
 #include "logger.h"
 #include <WiFi.h>
+#include <ArduinoJson.h>
 
 LeaderService::LeaderService(const AppConfig& cfg)
     : _cfg(cfg), _cloud(cfg.server_url, _time), _portal(80) {}
@@ -81,25 +82,40 @@ bool LeaderService::begin() {
 }
 
 
+
+
 bool LeaderService::provisionNode(const String& targetMacStr, const String& nodeName) {
     uint8_t targetMac[6];
-    if (!EspNowManager::macStringToBytes(targetMacStr, targetMac)) return false;
-
-    ProvisionConfigMsg msg;
-    msg.type = (MsgType)MSG_PROVISION;
-    strlcpy(msg.leader_mac, WiFi.macAddress().c_str(), sizeof(msg.leader_mac));
-    strlcpy(msg.device_name, nodeName.c_str(), sizeof(msg.device_name));
-    msg.channel = 1; // Le canal que nous avons forcé
-
-    // On ajoute le peer temporairement pour envoyer la config
-    _espnow.addPeer(targetMac);
-    
-    bool ok = _espnow.sendRaw(targetMac, (uint8_t*)&msg, sizeof(ProvisionConfigMsg));
-    
-    if (ok) {
-        Logger::info("Config envoyée avec succès à " + targetMacStr);
-        _discoveredList.erase(targetMacStr); // On le retire de la liste des "nouveaux"
+    if (!EspNowManager::macStringToBytes(targetMacStr, targetMac)) {
+        Logger::error("Provision failed: invalid target MAC " + targetMacStr);
+        return false;
     }
+
+    JsonDocument doc;
+    doc["type"] = "provision";
+    doc["leader_mac"] = WiFi.macAddress();
+    doc["device_name"] = nodeName;
+    doc["role"] = "follower";
+    doc["channel"] = 1;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    _espnow.addPeer(targetMac);
+    bool ok = _espnow.sendRaw(
+        targetMac,
+        reinterpret_cast<const uint8_t*>(payload.c_str()),
+        payload.length() + 1
+    );
+
+    if (ok) {
+        Logger::info("Config envoyée à " + targetMacStr + " (Nom: " + nodeName + ")");
+        Logger::info("Provision JSON: " + payload);
+        _discoveredList.erase(targetMacStr);
+    } else {
+        Logger::error("Echec envoi provisioning à " + targetMacStr);
+    }
+
     return ok;
 }
 

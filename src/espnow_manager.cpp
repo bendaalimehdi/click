@@ -2,6 +2,10 @@
 
 EspNowManager* EspNowManager::_instance = nullptr;
 
+void EspNowManager::onRawReceived(RawReceiveCallback cb) {
+    _rawReceiveCb = cb;
+}
+
 bool EspNowManager::begin() {
     _instance = this;
 
@@ -86,39 +90,34 @@ void EspNowManager::onDataRecv(const esp_now_recv_info_t* recvInfo, const uint8_
         return;
     }
 
-    const uint8_t* mac = recvInfo->src_addr;    uint8_t msgType = data[0]; 
+    const uint8_t* mac = recvInfo->src_addr;
 
-    Serial.printf("[ESPNOW RX] from %02X:%02X:%02X:%02X:%02X:%02X len=%d type=0x%02X\n",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], len, msgType);
+    Serial.printf("[ESPNOW RX] from %02X:%02X:%02X:%02X:%02X:%02X len=%d first=0x%02X\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], len, data[0]);
 
-    // Cas 1: Données de capteur OU Hello de Pairing
-    // Note: On utilise le _sensorCb pour les deux car ils arrivent au Leader.
-    // Le Leader fera le tri ensuite avec le msgType.
+    if (_instance->_rawReceiveCb) {
+        _instance->_rawReceiveCb(mac, data, static_cast<size_t>(len));
+    }
+
+    uint8_t msgType = data[0];
+
     if (msgType == MSG_SENSOR_DATA || msgType == MSG_PAIRING_REQ) {
         if (_instance->_sensorCb) {
-            // On utilise une structure temporaire SensorData pour le transport du callback
-            // C'est sans risque car le Leader cast en PairingHello si besoin.
-            SensorData packet;
-            size_t copyLen = (len < sizeof(SensorData)) ? len : sizeof(SensorData);
-            memset(&packet, 0, sizeof(packet));
+            SensorData packet{};
+            size_t copyLen = (len < (int)sizeof(SensorData)) ? len : sizeof(SensorData);
             memcpy(&packet, data, copyLen);
-            
             _instance->_sensorCb(mac, packet);
         }
-    } 
-    // Cas 2: Données de synchronisation ou Provisioning (arrivent au Follower)
-    else if (msgType == MSG_SYNC_DATA || msgType == MSG_PROVISION) {
+    }
+    else if (msgType == MSG_SYNC_DATA) {
         if (_instance->_syncCb) {
-            SyncData packet;
-            size_t copyLen = (len < sizeof(SyncData)) ? len : sizeof(SyncData);
-            memset(&packet, 0, sizeof(packet));
+            SyncData packet{};
+            size_t copyLen = (len < (int)sizeof(SyncData)) ? len : sizeof(SyncData);
             memcpy(&packet, data, copyLen);
-            
             _instance->_syncCb(mac, packet);
         }
     }
 }
-
 // Implémentation de l'envoi avec la nouvelle signature
 void EspNowManager::onDataSent(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
