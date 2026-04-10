@@ -3,15 +3,25 @@
 
 #pragma pack(push, 1)
 
+
 // Types de messages pour distinguer les paquets ESP-NOW
 enum MsgType : uint8_t {
     MSG_SENSOR_DATA = 0x01,
     MSG_SYNC_DATA   = 0x02,
     MSG_PAIRING_REQ = 0x10, // PairingHello
-    MSG_PROVISION   = 0x11, // ProvisionConfig
+    MSG_PROVISION   = 0x20, // ProvisionConfig
     MSG_PROV_ACK    = 0x12, // ProvisionAck
     MSG_IDENTIFY    = 0x13  // Commande pour faire clignoter la LED
 };
+
+struct ProvisionConfigMsg {
+    MsgType type = (MsgType)MSG_PROVISION;
+    char leader_mac[18];   // La MAC du leader pour que le follower sache qui écouter
+    char device_name[32];  // Le nom que vous avez saisi dans l'interface
+    uint8_t channel;       // Le canal WiFi utilisé
+};
+
+#pragma pack(pop)
 
 // Message d'appairage envoyé par le Follower en mode INSTALL
 struct PairingHello {
@@ -22,14 +32,7 @@ struct PairingHello {
     float battery_voltage;
 };
 
-// Configuration envoyée par le Leader au Follower
-struct ProvisionConfigMsg {
-    MsgType type = MSG_PROVISION;
-    char device_name[32];
-    int node_id;
-    char leader_mac[18];
-    uint32_t sleep_seconds;
-};
+
 
 // Mise à jour de la structure SensorData avec le type de message
 struct SensorData {
@@ -47,7 +50,7 @@ struct SyncData {
     uint32_t next_sleep_seconds;
 };
 
-#pragma pack(pop)
+
 
 // Structure pour stocker les followers détectés côté Leader (RAM)
 struct DiscoveredFollower {

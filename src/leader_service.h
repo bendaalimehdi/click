@@ -20,6 +20,8 @@ public:
     bool begin();
     void loop();
 
+    bool provisionNode(const String& mac, const String& name);
+
     // Getters pour le portail Web
     std::vector<NodeRecord> getNodes() const;
     PortalStatus getPortalStatus() const;
@@ -37,6 +39,8 @@ private:
     CloudQueueManager _queue;
     LeaderStateManager _state;
     ErrorTracker _errors;
+
+    using ProvisionCallback = std::function<bool(const String&, const String&)>;
 
     // Gestion des données en mémoire
     std::vector<NodeRecord> _nodes;

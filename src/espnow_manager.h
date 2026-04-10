@@ -17,6 +17,7 @@ public:
     bool sendSyncData(const uint8_t* mac, const SyncData& data);
     void onSensorReceived(SensorCallback cb);
     void onSyncReceived(SyncCallback cb);
+    bool sendRaw(const uint8_t* peer_mac, const uint8_t* data, size_t len);
 
     static bool macStringToBytes(const String& macStr, uint8_t out[6]);
     static String macBytesToString(const uint8_t* mac);

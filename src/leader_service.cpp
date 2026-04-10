@@ -39,15 +39,37 @@ bool LeaderService::begin() {
     }
 
     // Handler mis à jour pour traiter différents types de paquets
-    _espnow.onSensorReceived([this](const uint8_t* mac, const SensorData& packet) {
-        // On vérifie le type de message (Cast car le buffer brut est reçu)
-        uint8_t msgType = ((uint8_t*)&packet)[0]; 
+ _espnow.onSensorReceived([this](const uint8_t* mac, const SensorData& packet) {
+        // 1. Accès sécurisé au premier octet pour identifier le type de message
+        // On utilise un pointeur uint8_t pour lire l'en-tête sans risque de corruption
+        const uint8_t* rawData = (const uint8_t*)&packet;
+        uint8_t msgType = rawData[0]; 
 
-        if (msgType == MSG_SENSOR_DATA) {
-            handleSensorPacket(mac, packet);
+        // 2. Traitement selon le type de message
+        if (msgType == MSG_PAIRING_REQ) {
+            // Cast sécurisé vers PairingHello pour lire les infos d'installation
+            PairingHello* msg = (PairingHello*)rawData;
+            String macStr = EspNowManager::macBytesToString(mac);
+
+            // Création ou mise à jour du follower détecté dans la map RAM
+            DiscoveredFollower f;
+            f.mac = macStr;
+            f.volt = msg->battery_voltage;
+            f.sensorType = String(msg->sensor_type);
+            f.lastSeenMs = millis();
+            
+            _discoveredList[macStr] = f; 
+            
+            // LOG CRITIQUE pour le débug : Si vous voyez ça, la radio fonctionne !
+            Logger::info("Detected new follower: " + macStr + " (" + f.sensorType + ")");
         } 
-        else if (msgType == MSG_PAIRING_REQ) {
-            handlePairingRequest(mac, (PairingHello*)&packet);
+        else if (msgType == MSG_SENSOR_DATA) {
+            // Mode normal : On traite les données de température
+            handleSensorPacket(mac, packet);
+        }
+        else {
+            // Log de sécurité pour voir si d'autres paquets arrivent
+            Logger::warn("Unknown msg type received: " + String(msgType));
         }
     });
 
@@ -56,6 +78,29 @@ bool LeaderService::begin() {
     Logger::info("Leader ready");
     Logger::info("Time now: " + _time.nowString());
     return true;
+}
+
+
+bool LeaderService::provisionNode(const String& targetMacStr, const String& nodeName) {
+    uint8_t targetMac[6];
+    if (!EspNowManager::macStringToBytes(targetMacStr, targetMac)) return false;
+
+    ProvisionConfigMsg msg;
+    msg.type = (MsgType)MSG_PROVISION;
+    strlcpy(msg.leader_mac, WiFi.macAddress().c_str(), sizeof(msg.leader_mac));
+    strlcpy(msg.device_name, nodeName.c_str(), sizeof(msg.device_name));
+    msg.channel = 1; // Le canal que nous avons forcé
+
+    // On ajoute le peer temporairement pour envoyer la config
+    _espnow.addPeer(targetMac);
+    
+    bool ok = _espnow.sendRaw(targetMac, (uint8_t*)&msg, sizeof(ProvisionConfigMsg));
+    
+    if (ok) {
+        Logger::info("Config envoyée avec succès à " + targetMacStr);
+        _discoveredList.erase(targetMacStr); // On le retire de la liste des "nouveaux"
+    }
+    return ok;
 }
 
 void LeaderService::maintainWiFi() {
@@ -74,7 +119,7 @@ void LeaderService::setupWiFi() {
     WiFi.mode(WIFI_AP_STA);
     
     // Fixer le canal WiFi est crucial pour que ESP-NOW fonctionne avec les followers
-    if (WiFi.softAP(_cfg.ap_ssid.c_str(), _cfg.ap_pass.c_str())) {
+    if (WiFi.softAP(_cfg.ap_ssid.c_str(), _cfg.ap_pass.c_str(), 1)) {
         Logger::info("AP IP: " + WiFi.softAPIP().toString());
     }
 
@@ -86,9 +131,18 @@ void LeaderService::setupWiFi() {
 void LeaderService::setupApPortal() {
     _portal.begin(
         _cfg,
-        [this](const AppConfig& newCfg) -> bool { return saveConfig(newCfg); },
-        [this]() -> std::vector<NodeRecord> { return getNodes(); },
-        [this]() -> PortalStatus { return getPortalStatus(); }
+        [this](const AppConfig& c) { return saveConfig(c); },
+        [this]() { return getNodes(); },
+        [this]() { return getPortalStatus(); },
+        [this]() { 
+            std::vector<DiscoveredFollower> list;
+            for(auto const& [mac, f] : _discoveredList) list.push_back(f);
+            return list;
+        },
+        // AJOUTE BIEN CE DERNIER BLOC :
+        [this](const String& mac, const String& name) { 
+            return provisionNode(mac, name); 
+        }
     );
 }
 

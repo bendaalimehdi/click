@@ -17,6 +17,11 @@ bool EspNowManager::begin() {
     return true;
 }
 
+bool EspNowManager::sendRaw(const uint8_t* peer_mac, const uint8_t* data, size_t len) {
+    esp_err_t result = esp_now_send(peer_mac, data, len);
+    return (result == ESP_OK);
+}
+
 bool EspNowManager::addPeer(const uint8_t* mac, uint8_t channel, bool encrypt) {
     if (esp_now_is_peer_exist(mac)) {
         return true;
@@ -77,21 +82,40 @@ String EspNowManager::macBytesToString(const uint8_t* mac) {
 
 // Implémentation de la réception compatible ESP32-C6 (v3.0.0+)
 void EspNowManager::onDataRecv(const esp_now_recv_info_t* recvInfo, const uint8_t* data, int len) {
-    if (!_instance || !recvInfo || !data) {
+    if (!_instance || !recvInfo || !data || len < 1) {
         return;
     }
 
-    const uint8_t* mac = recvInfo->src_addr;
+    const uint8_t* mac = recvInfo->src_addr;    uint8_t msgType = data[0]; 
 
-    if (len == sizeof(SensorData) && _instance->_sensorCb) {
-        SensorData packet;
-        memcpy(&packet, data, sizeof(packet));
-        _instance->_sensorCb(mac, packet);
+    Serial.printf("[ESPNOW RX] from %02X:%02X:%02X:%02X:%02X:%02X len=%d type=0x%02X\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], len, msgType);
+
+    // Cas 1: Données de capteur OU Hello de Pairing
+    // Note: On utilise le _sensorCb pour les deux car ils arrivent au Leader.
+    // Le Leader fera le tri ensuite avec le msgType.
+    if (msgType == MSG_SENSOR_DATA || msgType == MSG_PAIRING_REQ) {
+        if (_instance->_sensorCb) {
+            // On utilise une structure temporaire SensorData pour le transport du callback
+            // C'est sans risque car le Leader cast en PairingHello si besoin.
+            SensorData packet;
+            size_t copyLen = (len < sizeof(SensorData)) ? len : sizeof(SensorData);
+            memset(&packet, 0, sizeof(packet));
+            memcpy(&packet, data, copyLen);
+            
+            _instance->_sensorCb(mac, packet);
+        }
     } 
-    else if (len == sizeof(SyncData) && _instance->_syncCb) {
-        SyncData packet;
-        memcpy(&packet, data, sizeof(packet));
-        _instance->_syncCb(mac, packet);
+    // Cas 2: Données de synchronisation ou Provisioning (arrivent au Follower)
+    else if (msgType == MSG_SYNC_DATA || msgType == MSG_PROVISION) {
+        if (_instance->_syncCb) {
+            SyncData packet;
+            size_t copyLen = (len < sizeof(SyncData)) ? len : sizeof(SyncData);
+            memset(&packet, 0, sizeof(packet));
+            memcpy(&packet, data, copyLen);
+            
+            _instance->_syncCb(mac, packet);
+        }
     }
 }
 

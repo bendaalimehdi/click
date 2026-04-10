@@ -2,10 +2,10 @@
   "role": "leader",
   "id": 1,
   "device_name": "leader-1",
-  "wifi_ssid": "BboxM",
-  "wifi_pass": "Midi2210@bbox",
+  "wifi_ssid": "Livebox-57C0_kon",
+  "wifi_pass": "Designclic94270+",
   "server_url": "http://192.168.1.119:5000/api/fridge",
-  "leader_mac": "10:51:DB:1C:43:9C",
+  "leader_mac": "",
   "timezone": "CET-1CEST,M3.5.0/2,M10.5.0/3",
   "gpio_pins": {
     "i2c_sda": 6,

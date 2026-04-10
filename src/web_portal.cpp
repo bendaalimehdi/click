@@ -1,17 +1,24 @@
 #include "web_portal.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include "protocol_types.h"
+#include "leader_service.h"
+#include "logger.h"
 
 WebPortal::WebPortal(uint16_t port) : _server(port) {}
 
 void WebPortal::begin(const AppConfig& cfg,
                       SaveConfigCallback saveCb,
                       GetNodesCallback nodesCb,
-                      GetStatusCallback statusCb) {
+                      GetStatusCallback statusCb,
+                      GetDiscoveredCallback discoveredCb,
+                      ProvisionCallback provisionCb) { 
     _cfg = cfg;
     _saveCb = saveCb;
     _nodesCb = nodesCb;
     _statusCb = statusCb;
+    _discoveredCb = discoveredCb;
+    _provisionCb = provisionCb;
     setupRoutes();
     _server.begin();
 }
@@ -46,9 +53,15 @@ void WebPortal::setupRoutes() {
     _server.on("/api/provision/list", HTTP_GET, [this](AsyncWebServerRequest* request) {
         JsonDocument doc;
         JsonArray arr = doc.to<JsonArray>();
-        
-        // Note: Accède à la liste des découvertes via le callback ou l'instance Leader
-        // Pour l'exemple, on renvoie un tableau vide si non implémenté
+        if (_discoveredCb) {
+            auto discovered = _discoveredCb(); 
+            for (const auto& f : discovered) {
+                JsonObject o = arr.add<JsonObject>();
+                o["mac"] = f.mac;
+                o["volt"] = f.volt;
+                o["sensor"] = f.sensorType;
+            }
+        }
         String out;
         serializeJson(doc, out);
         request->send(200, "application/json", out);
@@ -65,6 +78,24 @@ void WebPortal::setupRoutes() {
         serializeJson(doc, out);
         request->send(200, "application/json", out);
     });
+
+
+
+    _server.on("/api/provision/apply", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        if (request->hasParam("mac") && request->hasParam("name")) {
+            // ON RÉCUPÈRE LES STRINGS ICI
+            String mac = request->getParam("mac")->value();
+            String name = request->getParam("name")->value();
+            
+            // On les passe au callback
+            if (_provisionCb && _provisionCb(mac, name)) { // Utilise les variables 'mac' et 'name' créées juste au dessus
+                request->send(200, "text/plain", "OK");
+            } else {
+                request->send(500, "text/plain", "Error");
+            }
+        }
+    });
+
 
     _server.on("/save", HTTP_POST, [this](AsyncWebServerRequest* request) {
         AppConfig newCfg = _cfg;
@@ -89,83 +120,74 @@ String WebPortal::htmlPage() {
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>Fridge Leader - Installation</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-    :root { --primary: #007bff; --success: #28a745; --warning: #ffc107; --danger: #dc3545; --bg: #f4f7f9; --card: #ffffff; }
-    body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: var(--bg); color: #333; }
-    .container { max-width: 1000px; margin: 0 auto; }
-    .card { background: var(--card); padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    h2 { color: var(--primary); border-bottom: 2px solid var(--bg); padding-bottom: 10px; }
-    table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; padding: 12px; background: var(--bg); }
-    td { padding: 12px; border-bottom: 1px solid #eee; }
-    .btn { background: var(--primary); color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; }
-    .input-small { padding: 5px; border: 1px solid #ddd; border-radius: 4px; width: 120px; }
-</style>
+    <meta charset="utf-8">
+    <title>Fridge Leader</title>
+    <style>
+        /* ... tes styles ... */
+        .detected-row { background: #fffde7; }
+    </style>
 </head>
 <body>
 <div class="container">
     <div class="card">
-        <h2>Détection Nouveaux Capteurs (Provisioning)</h2>
+        <h2>Nouveaux Capteurs détectés</h2>
         <table>
-            <thead><tr><th>MAC</th><th>Batt</th><th>Type</th><th>Action</th></tr></thead>
+            <thead><tr><th>MAC</th><th>Batt</th><th>Type</th><th>Nom à donner</th><th>Action</th></tr></thead>
             <tbody id="provision-list"></tbody>
         </table>
     </div>
-
-    <div class="card">
-        <h2>Dashboard Followers</h2>
-        <table>
-            <thead><tr><th>ID</th><th>Nom</th><th>Temp</th><th>Batterie</th><th>Dernier signe</th></tr></thead>
-            <tbody id="nodes"></tbody>
-        </table>
     </div>
-
-    <div class="card">
-        <h2>Paramètres Leader</h2>
-        <form method="POST" action="/save">
-            <label>Nom Leader</label><br><input name="device_name" value=")HTML" + _cfg.device_name + R"HTML("><br>
-            <label>WiFi SSID</label><br><input name="wifi_ssid" value=")HTML" + _cfg.wifi_ssid + R"HTML("><br>
-            <button type="submit" class="btn" style="margin-top:10px">Sauvegarder</button>
-        </form>
-    </div>
-</div>
 
 <script>
+// Empêcher le rafraîchissement si l'utilisateur écrit
+let isTyping = false;
+
+async function applyConfig(mac) {
+    const name = document.getElementById('n-' + mac).value;
+    if(!name) { alert("Donnez un nom !"); return; }
+    
+    const btn = document.querySelector(`button[onclick="applyConfig('${mac}')"]`);
+    btn.disabled = true;
+    btn.innerText = "Envoi...";
+
+    try {
+        const res = await fetch(`/api/provision/apply?mac=${mac}&name=${name}`, { method: 'POST' });
+        if(res.ok) {
+            alert("Configuration envoyée ! Le capteur va redémarrer.");
+            refreshProvisioning();
+        } else {
+            alert("Erreur lors de l'envoi");
+        }
+    } catch(e) { alert("Erreur réseau"); }
+    btn.disabled = false;
+    btn.innerText = "Installer";
+}
+
 async function refreshProvisioning() {
+    if (isTyping) return; // Stop refresh pendant la saisie
     try {
         const res = await fetch('/api/provision/list');
         const data = await res.json();
         const tbody = document.getElementById('provision-list');
-        tbody.innerHTML = data.length ? '' : '<tr><td colspan="4">Aucun nouveau capteur détecté...</td></tr>';
+        
+        // On ne reconstruit que si le nombre de devices change ou si vide
+        let html = "";
         data.forEach(f => {
-            tbody.innerHTML += `
-                <tr>
+            html += `
+                <tr class="detected-row">
                     <td>${f.mac}</td>
                     <td>${f.volt}V</td>
                     <td>${f.sensor}</td>
-                    <td>
-                        <input type="text" id="n-${f.mac}" class="input-small" placeholder="Nom">
-                        <button class="btn" onclick="applyConfig('${f.mac}')">Installer</button>
-                    </td>
+                    <td><input type="text" id="n-${f.mac}" onfocus="isTyping=true" onblur="isTyping=false" class="input-small"></td>
+                    <td><button class="btn" onclick="applyConfig('${f.mac}')">Installer</button></td>
                 </tr>`;
         });
+        if(html === "") html = "<tr><td colspan='5'>Aucun nouveau capteur...</td></tr>";
+        tbody.innerHTML = html;
     } catch(e) {}
 }
 
-async function refreshNodes() {
-    const res = await fetch('/api/nodes');
-    const data = await res.json();
-    const tbody = document.getElementById('nodes');
-    tbody.innerHTML = '';
-    data.forEach(n => {
-        tbody.innerHTML += `<tr><td>${n.id}</td><td>${n.client}</td><td>${n.temp}°C</td><td>${n.volt}V</td><td>${(n.last_seen_ms/1000).toFixed(0)}s</td></tr>`;
-    });
-}
-
-setInterval(() => { refreshNodes(); refreshProvisioning(); }, 3000);
+setInterval(refreshProvisioning, 3000);
 </script>
 </body>
 </html>

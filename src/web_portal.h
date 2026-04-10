@@ -18,9 +18,10 @@ public:
     using SaveConfigCallback = std::function<bool(const AppConfig&)>;
     using GetNodesCallback   = std::function<std::vector<NodeRecord>()>;
     using GetStatusCallback  = std::function<PortalStatus()>;
-    
-    // NOUVEAU : Callback pour récupérer la liste des followers détectés (provisioning)
+
     using GetDiscoveredCallback = std::function<std::vector<DiscoveredFollower>()>;
+    using ProvisionCallback = std::function<bool(const String&, const String&)>;
+    
 
     WebPortal(uint16_t port = 80);
 
@@ -29,7 +30,8 @@ public:
                SaveConfigCallback saveCb,
                GetNodesCallback nodesCb,
                GetStatusCallback statusCb,
-               GetDiscoveredCallback discoveredCb = nullptr); // Optionnel par défaut
+               GetDiscoveredCallback discoveredCb,
+               ProvisionCallback provisionCb);
 
 private:
     AsyncWebServer _server;
@@ -37,7 +39,8 @@ private:
     SaveConfigCallback _saveCb;
     GetNodesCallback _nodesCb;
     GetStatusCallback _statusCb;
-    GetDiscoveredCallback _discoveredCb; // Stockage du callback
+    GetDiscoveredCallback _discoveredCb; 
+    ProvisionCallback _provisionCb;
 
     String htmlPage();
     void setupRoutes();

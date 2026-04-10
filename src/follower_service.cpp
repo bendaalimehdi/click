@@ -2,6 +2,7 @@
 #include "logger.h"
 #include "config_manager.h"
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <esp_sleep.h>
 
 FollowerService::FollowerService(const AppConfig& cfg)
@@ -35,6 +36,7 @@ bool FollowerService::runInstallMode() {
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
 
     if (!_espnow.begin()) {
         Logger::error("Erreur ESP-NOW en mode Install");
@@ -43,36 +45,59 @@ bool FollowerService::runInstallMode() {
         return false;
     }
 
-    // Callback pour intercepter les messages de provisioning
-    // Note : Cette partie nécessite que EspNowManager gère le type MSG_PROVISION
-    _espnow.onSyncReceived([this](const uint8_t* mac, const SyncData& sync) {
-        // Logique de réception de configuration via ESP-NOW
-        // Une fois la config reçue, on sauvegarde et on redémarre
-    });
+    // Ajouter explicitement le peer broadcast
+    uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    bool peerOk = _espnow.addPeer(broadcastMac, 1, false);
+    Logger::info(peerOk ? "Broadcast peer OK" : "Broadcast peer FAIL");
+
+   _espnow.onSyncReceived([this](const uint8_t* mac, const SyncData& packet) {
+    const uint8_t* raw = (const uint8_t*)&packet;
+    uint8_t type = raw[0];
+    
+    if (type == MSG_PROVISION) {
+        ProvisionConfigMsg* msg = (ProvisionConfigMsg*)raw;
+        Logger::info("PROVISION REÇU ! Leader MAC: " + String(msg->leader_mac));
+        
+        
+        // Mise à jour de la config en mémoire
+        _cfg.leader_mac = String(msg->leader_mac);
+        _cfg.device_name = String(msg->device_name);
+        _cfg.role = "follower";
+
+        // Sauvegarde physique sur LittleFS
+        ConfigManager cm;
+        if (cm.begin() && cm.save(_cfg)) {
+            Logger::info("Config sauvegardée. Redémarrage...");
+            delay(2000);
+            ESP.restart();
+        }
+    }
+});
 
     uint32_t lastBeacon = 0;
     while (true) {
-        // Envoi d'un signal "PairingHello" toutes les 3 secondes
         if (millis() - lastBeacon > 3000) {
             lastBeacon = millis();
-            
-            PairingHello hello;
+
+            PairingHello hello = {};
+            hello.type = MSG_PAIRING_REQ;
             strlcpy(hello.uid, WiFi.macAddress().c_str(), sizeof(hello.uid));
             strlcpy(hello.firmware, "1.1.0", sizeof(hello.firmware));
             strlcpy(hello.sensor_type, _cfg.sensor_type.c_str(), sizeof(hello.sensor_type));
             hello.battery_voltage = _battery.readVoltage();
 
-            // Envoi en broadcast (FF:FF:FF:FF:FF:FF) pour être détecté par le Leader
-            uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-            _espnow.sendSensorData(broadcastMac, *((SensorData*)&hello)); 
-            
-            Logger::info("PairingHello envoyé pour détection...");
+            bool sent = _espnow.sendRaw(
+                broadcastMac,
+                reinterpret_cast<const uint8_t*>(&hello),
+                sizeof(hello)
+            );
+
+            Logger::info(sent ? "PairingHello SEND OK" : "PairingHello SEND FAIL");
         }
 
-        // Petit clignotement LED optionnel pour indiquer le mode installation
-        // yield() pour éviter le watchdog
         delay(10);
     }
+    return true;
 }
 
 bool FollowerService::runNormalMode(uint32_t bootMs) {
