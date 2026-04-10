@@ -1,20 +1,38 @@
 #include "cloud_queue_manager.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "espnow_manager.h"
+
+CloudQueueManager::CloudQueueManager(TimeManager& timeMgr) : _time(timeMgr) {
+    // Initialisation simple
+}
 
 bool CloudQueueManager::begin() {
     return true;
 }
 
-bool CloudQueueManager::enqueueFromSensorData(const SensorData& data) {
+void CloudQueueManager::enqueueFromSensorData(const SensorData& packet, const uint8_t* mac) {
     QueuedCloudItem item;
-    item.client = String(data.client);
-    item.node = data.id;
-    item.temp = data.temp;
-    item.volt = data.volt;
-    item.createdAt = (uint32_t)time(nullptr);
-    item.retryCount = 0;
-    return enqueue(item);
+    
+    // Correction erreur 413 : On utilise strlcpy
+    strlcpy(item.client, packet.client, sizeof(item.client));
+
+    String macStr = EspNowManager::macBytesToString(mac);
+    String cleanUuid = "";
+    for (char c : macStr) { 
+        if (c != ':') cleanUuid += c; 
+    }
+    
+    // Correction membre "uuid" : maintenant reconnu grâce à protocol_types.h
+    strlcpy(item.uuid, cleanUuid.c_str(), sizeof(item.uuid));
+
+    item.temp = packet.temp;
+    item.volt = packet.volt;
+    
+    // Correction erreur getNow : vérifiez le nom exact dans time_manager.h (souvent getEpoch)
+    item.createdAt = _time.getNow();
+
+    enqueue(item); 
 }
 
 bool CloudQueueManager::enqueue(const QueuedCloudItem& item) {
@@ -125,29 +143,22 @@ String CloudQueueManager::getLastError() const {
 
 bool CloudQueueManager::parseLine(const String& line, QueuedCloudItem& item) {
     JsonDocument doc;
-    auto err = deserializeJson(doc, line);
-    if (err) {
-        _lastError = "Queue line parse failed";
-        return false;
-    }
+    if (deserializeJson(doc, line)) return false;
 
-    item.client = String((const char*)(doc["client"] | ""));
-    item.node = doc["node"] | 0;
-    item.temp = doc["temp"] | NAN;
-    item.volt = doc["volt"] | NAN;
+    strlcpy(item.client, doc["client"] | "", sizeof(item.client));
+    strlcpy(item.uuid, doc["uuid"] | "", sizeof(item.uuid)); // Lecture de l'UUID
+    item.temp = doc["temp"] | 0.0f;
+    item.volt = doc["volt"] | 0.0f;
     item.createdAt = doc["createdAt"] | 0;
-    item.retryCount = doc["retryCount"] | 0;
     return true;
 }
-
 String CloudQueueManager::serializeLine(const QueuedCloudItem& item) {
     JsonDocument doc;
-    doc["client"] = item.client;
-    doc["node"] = item.node;
+    doc["client"] = String(item.client);
+    doc["uuid"] = String(item.uuid); // Ajout de l'UUID dans le JSON local
     doc["temp"] = item.temp;
     doc["volt"] = item.volt;
     doc["createdAt"] = item.createdAt;
-    doc["retryCount"] = item.retryCount;
 
     String out;
     serializeJson(doc, out);

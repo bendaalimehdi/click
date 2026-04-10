@@ -70,3 +70,13 @@ struct NodeRecord {
     uint32_t lastSeenMs = 0;
     String mac;
 }; 
+
+// À ajouter à la fin de protocol_types.h
+
+struct QueuedCloudItem {
+    char client[32];    // Nom amical (ex: "FrigoMehdi")
+    char uuid[13];      // UUID technique / MAC (ex: "80B54EC323AA")
+    float temp;
+    float volt;
+    uint32_t createdAt; // Date de la prise de mesure
+};

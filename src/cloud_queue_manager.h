@@ -3,21 +3,17 @@
 #include <Arduino.h>
 #include <vector>
 #include "protocol_types.h"
+#include "time_manager.h"
 
-struct QueuedCloudItem {
-    String client;
-    int node = 0;
-    float temp = NAN;
-    float volt = NAN;
-    uint32_t createdAt = 0;
-    uint32_t retryCount = 0;
-};
+
 
 class CloudQueueManager {
 public:
+    CloudQueueManager(TimeManager& timeMgr);
     bool begin();
 
-    bool enqueueFromSensorData(const SensorData& data);
+    
+    void enqueueFromSensorData(const SensorData& packet, const uint8_t* mac);
     bool enqueue(const QueuedCloudItem& item);
 
     bool peek(QueuedCloudItem& item);
@@ -33,6 +29,7 @@ public:
 private:
     String _lastError;
     const char* _queueFile = "/cloud_queue.ndjson";
+    TimeManager& _time;
 
     bool parseLine(const String& line, QueuedCloudItem& item);
     String serializeLine(const QueuedCloudItem& item);

@@ -77,3 +77,7 @@ String TimeManager::nowString() {
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
     return String(buf);
 }
+
+uint32_t TimeManager::getNow() {
+    return (uint32_t)time(nullptr);
+}

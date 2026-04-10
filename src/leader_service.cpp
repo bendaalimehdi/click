@@ -6,7 +6,7 @@
 #include <ArduinoJson.h>
 
 LeaderService::LeaderService(const AppConfig& cfg)
-    : _cfg(cfg), _cloud(cfg.server_url, _time), _portal(80) {}
+    : _cfg(cfg), _cloud(cfg.server_url, _time), _queue(_time), _portal(80) {}
 
 bool LeaderService::begin() {
     setupWiFi();
@@ -218,7 +218,9 @@ void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& pac
     if (!_cloud.postSensorData(packet, mac, _cfg.leader_mac, _cfg.device_name)) {
         Logger::warn("Cloud failed, data queued");
         _errors.setLastError(_cloud.getLastError());
-        _queue.enqueueFromSensorData(packet);
+        
+        // CORRECTION ICI : Passez l'argument 'mac'
+        _queue.enqueueFromSensorData(packet, mac); 
     } else {
         _errors.clear();
     }

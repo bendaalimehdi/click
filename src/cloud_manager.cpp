@@ -3,52 +3,78 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "espnow_manager.h"
+#include "config_manager.h"
+#include "protocol_types.h"
 
 CloudManager::CloudManager(const String& serverUrl, TimeManager& timeMgr)
     : _serverUrl(serverUrl), _time(timeMgr) {} //
 
+
+
+// Format unifié : Envoi immédiat (un seul capteur dans la liste)
 bool CloudManager::postSensorData(const SensorData& data, const uint8_t* sensorMac, 
                                  const String& leaderMac, const String& leaderName) {
-    // Formatage UUID Capteur (MAC sans ":")
+    // 1. Générer le VRAI UUID à partir de la MAC du capteur
     String sMacStr = EspNowManager::macBytesToString(sensorMac);
     String sensorUuid = "";
-    for (char c : sMacStr) { if (c != ':') sensorUuid += c; }
+    for (char c : sMacStr) { if (c != ':') sensorUuid += c; } // Devrait donner ex: "80B54EC323AA"
 
-    // Formatage UUID Leader (MAC sans ":")
     String lUuid = "";
     for (char c : leaderMac) { if (c != ':') lUuid += c; }
 
     JsonDocument doc;
-    doc["statusCode"] = 200;
-    doc["update_date"] = _time.nowString();
+    doc["leader_uuid"] = lUuid;
+    doc["leader_name"] = leaderName;
+
+    JsonArray sensors = doc["sensors"].to<JsonArray>();
+    JsonObject s = sensors.add<JsonObject>();
     
-    // Nouveaux champs demandés
-    doc["device_uuid"] = sensorUuid;      // UUID du capteur
-    doc["leader_uuid"] = lUuid;           // UUID du leader
-    doc["leader_name"] = leaderName;      // Nom du leader (ex: "leader-1")
-
-    // Autres champs
-    doc["temperature_C"] = String(data.temp, 2);
-    doc["battery_voltage"] = (int)(data.volt * 1000);
-    doc["user_identify"] = "Bind_Via_Gateway";
-    // ... (autres champs habituels)
+    // 2. Assigner les bonnes valeurs aux bonnes clés
+    s["device_uuid"] = sensorUuid;         // L'identifiant MAC unique
+    s["device_name"] = String(data.client); // Le nom "FrigoMehdi"
+    
+    s["temperature_C"] = round(data.temp * 100.0) / 100.0;
+    s["battery_voltage"] = (int)(data.volt * 1000);
+    s["update_date"] = _time.nowString();
 
     String payload;
     serializeJson(doc, payload);
     return postJsonPayload(payload);
 }
-
 bool CloudManager::postQueuedItem(const QueuedCloudItem& item) {
+    struct tm t;
+    time_t rawtime = (time_t)item.createdAt;
+    localtime_r(&rawtime, &t);
+    char dateBuf[32];
+    strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%dT%H:%M:%S", &t);
+
+    extern AppConfig gConfig; 
+   
+    String lMacStr = gConfig.leader_mac.isEmpty() ? String(WiFi.macAddress()) : gConfig.leader_mac;
+    String lUuid = "";
+    for (char c : lMacStr) { if (c != ':') lUuid += c; }
+
     JsonDocument doc;
-    doc["client"] = item.client;
-    doc["node"] = item.node;
-    doc["temp"] = item.temp;
-    doc["volt"] = item.volt;
+    doc["leader_uuid"] = lUuid;
+    doc["leader_name"] = gConfig.device_name;
+
+    JsonArray sensors = doc["sensors"].to<JsonArray>();
+    JsonObject s = sensors.add<JsonObject>();
+    
+    s["device_uuid"] = String(item.uuid);   
+    s["device_name"] = String(item.client); 
+    
+    s["temperature_C"] = round(item.temp * 100.0) / 100.0;
+    s["battery_voltage"] = (int)(item.volt * 1000);
+    s["update_date"] = String(dateBuf);
+    s["message"] = "Sensor Status Report (Retry)"; // Précise que c'est un renvoi
 
     String payload;
     serializeJson(doc, payload);
     return postJsonPayload(payload);
 }
+
+
 
 bool CloudManager::postJsonPayload(const String& payload) {
     if (_serverUrl.isEmpty()) {

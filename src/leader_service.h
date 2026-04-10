@@ -33,8 +33,8 @@ public:
 private:
     AppConfig _cfg;
     EspNowManager _espnow;
-    CloudManager _cloud;
     TimeManager _time;
+    CloudManager _cloud;
     WebPortal _portal;
     CloudQueueManager _queue;
     LeaderStateManager _state;

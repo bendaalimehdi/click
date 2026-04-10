@@ -9,6 +9,7 @@ public:
     bool isTimeSynced(uint32_t timeoutMs = 15000);
     uint32_t secondsUntilNextSlot(const std::vector<String>& reportTimes);
     String nowString();
+    uint32_t getNow();
 
 private:
     bool parseHHMM(const String& str, int& h, int& m);
