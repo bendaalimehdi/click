@@ -30,6 +30,14 @@ public:
     // Actions de configuration
     bool saveConfig(const AppConfig& cfg);
     void maintainWiFi();
+    void flushPendingCloudPosts();
+
+    struct PendingCloudSend {
+    SensorData packet;
+    uint8_t mac[6];
+    };
+
+    std::vector<PendingCloudSend> _pendingCloud;
 
 
    

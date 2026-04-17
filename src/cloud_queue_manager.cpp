@@ -11,28 +11,23 @@ bool CloudQueueManager::begin() {
     return true;
 }
 
-void CloudQueueManager::enqueueFromSensorData(const SensorData& packet, const uint8_t* mac) {
+bool CloudQueueManager::enqueueFromSensorData(const SensorData& packet, const uint8_t* mac) {
     QueuedCloudItem item;
-    
-    // Correction erreur 413 : On utilise strlcpy
+
     strlcpy(item.client, packet.client, sizeof(item.client));
 
     String macStr = EspNowManager::macBytesToString(mac);
     String cleanUuid = "";
-    for (char c : macStr) { 
-        if (c != ':') cleanUuid += c; 
+    for (char c : macStr) {
+        if (c != ':') cleanUuid += c;
     }
-    
-    // Correction membre "uuid" : maintenant reconnu grâce à protocol_types.h
-    strlcpy(item.uuid, cleanUuid.c_str(), sizeof(item.uuid));
 
+    strlcpy(item.uuid, cleanUuid.c_str(), sizeof(item.uuid));
     item.temp = packet.temp;
     item.volt = packet.volt;
-    
-    // Correction erreur getNow : vérifiez le nom exact dans time_manager.h (souvent getEpoch)
     item.createdAt = _time.getNow();
 
-    enqueue(item); 
+    return enqueue(item);
 }
 
 bool CloudQueueManager::enqueue(const QueuedCloudItem& item) {

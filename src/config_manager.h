@@ -35,6 +35,8 @@ struct AppConfig {
     GpioPinsConfig gpio_pins;
     BatteryConfig battery;
     std::vector<String> report_times;
+    String report_mode = "interval";
+    uint16_t report_interval_min = 60;
 };
 
 class ConfigManager {

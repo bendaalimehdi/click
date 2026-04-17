@@ -2,9 +2,10 @@
 #include <time.h>
 
 bool TimeManager::begin(const String& timezone) {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     setenv("TZ", timezone.c_str(), 1);
     tzset();
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    
     return true;
 }
 
@@ -29,44 +30,18 @@ bool TimeManager::parseHHMM(const String& str, int& h, int& m) {
     return h >= 0 && h < 24 && m >= 0 && m < 60;
 }
 
-uint32_t TimeManager::secondsUntilNextSlot(const std::vector<String>& reportTimes) {
+uint32_t TimeManager::secondsUntilNextInterval(uint16_t intervalMin) {
     time_t now = time(nullptr);
     if (now < 100000) {
-        return 12UL * 3600UL;
+        return intervalMin * 60; // fallback si pas sync
     }
 
-    struct tm localNow;
-    localtime_r(&now, &localNow);
+    uint32_t nowSec = (uint32_t)now;
+    uint32_t intervalSec = intervalMin * 60;
 
-    time_t best = 0;
-    bool found = false;
+    uint32_t next = ((nowSec / intervalSec) + 1) * intervalSec;
 
-    for (const auto& slot : reportTimes) {
-        int h, m;
-        if (!parseHHMM(slot, h, m)) continue;
-
-        struct tm candidate = localNow;
-        candidate.tm_hour = h;
-        candidate.tm_min = m;
-        candidate.tm_sec = 0;
-
-        time_t candidateTs = mktime(&candidate);
-        if (candidateTs <= now) {
-            candidate.tm_mday += 1;
-            candidateTs = mktime(&candidate);
-        }
-
-        if (!found || candidateTs < best) {
-            best = candidateTs;
-            found = true;
-        }
-    }
-
-    if (!found) return 12UL * 3600UL;
-
-    uint32_t delta = (uint32_t)(best - now);
-    if (delta == 0) delta = 1;
-    return delta;
+    return next - nowSec;
 }
 
 String TimeManager::nowString() {

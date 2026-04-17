@@ -1,4 +1,3 @@
-#define FASTLED_ESP32_LCD_DRIVER
 #include "led_manager.h"
 
 LedManager::LedManager(uint8_t pin, uint8_t numPixels)
@@ -7,26 +6,34 @@ LedManager::LedManager(uint8_t pin, uint8_t numPixels)
 void LedManager::begin() {
     FastLED.addLeds<WS2812, STATUS_LED_PIN, GRB>(_leds, 1);
     FastLED.setBrightness(40);
-    _leds[0] = CRGB::Black;
+    _baseColor = CRGB::Black;
+    _leds[0] = _baseColor;
     FastLED.show();
 }
 
-void LedManager::setColor(uint8_t r, uint8_t g, uint8_t b) {
-    _leds[0] = CRGB(r, g, b);
+void LedManager::applyColor(const CRGB& color) {
+    _leds[0] = color;
     FastLED.show();
 }
 
-void LedManager::setRed()   { _blinking = false; setColor(255, 0, 0); }
-void LedManager::setGreen() { _blinking = false; setColor(0, 255, 0); }
-void LedManager::setBlue()  { _blinking = false; setColor(0, 0, 255); }
-void LedManager::setOff()   { _blinking = false; setColor(0, 0, 0); }
+void LedManager::setBaseColor(const CRGB& color) {
+    _baseColor = color;
+    if (!_blinking) {
+        applyColor(_baseColor);
+    }
+}
+
+void LedManager::setRed()   { _blinking = false; setBaseColor(CRGB::Red); }
+void LedManager::setGreen() { _blinking = false; setBaseColor(CRGB::Green); }
+void LedManager::setBlue()  { _blinking = false; setBaseColor(CRGB::Blue); }
+void LedManager::setOff()   { _blinking = false; setBaseColor(CRGB::Black); }
 
 void LedManager::blinkBlue(uint8_t times) {
     _blinkRemaining = times * 2;
     _blinkState = true;
     _blinking = true;
     _lastBlinkMs = millis();
-    setColor(0, 0, 255);
+    applyColor(CRGB::Blue);
 }
 
 void LedManager::tick() {
@@ -38,10 +45,10 @@ void LedManager::tick() {
 
     if (_blinkRemaining == 0) {
         _blinking = false;
-        setColor(0, 0, 0);
+        applyColor(_baseColor);   // retour à l’état Wi-Fi
         return;
     }
 
     _blinkState = !_blinkState;
-    _blinkState ? setColor(0, 0, 255) : setColor(0, 0, 0);
+    applyColor(_blinkState ? CRGB::Blue : _baseColor);
 }

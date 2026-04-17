@@ -1,7 +1,7 @@
 {
   "role": "follower",
-  "id": 2,
-  "device_name": "follower-1",
+  "id": 3,
+  "device_name": "follower-2",
   "wifi_ssid": "Livebox-57C0",
   "wifi_pass": "Designclic94270+",
   "wifi_channel": 1,
@@ -13,10 +13,8 @@
     "i2c_scl": 7,
     "battery_adc": 5
   },
-  "report_times": [
-    "10:00",
-    "22:00"
-  ],
+  "report_mode": "interval", 
+  "report_interval_min": 15,
   "follower_wait_sync_ms": 1000,
   "ap_ssid": "MANAGER_LEADER",
   "ap_pass": "12345678",

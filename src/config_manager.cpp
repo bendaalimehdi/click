@@ -76,6 +76,8 @@ bool ConfigManager::applyJsonToConfig(const JsonDocument& doc, AppConfig& cfg) {
     cfg.ap_pass = String((const char*)(doc["ap_pass"] | cfg.ap_pass.c_str()));
     cfg.sensor_type = String((const char*)(doc["sensor_type"] | cfg.sensor_type.c_str()));
     cfg.follower_wait_sync_ms = doc["follower_wait_sync_ms"] | cfg.follower_wait_sync_ms;
+    cfg.report_mode = doc["report_mode"] | cfg.report_mode;
+    cfg.report_interval_min = doc["report_interval_min"] | cfg.report_interval_min;
 
     if (doc["gpio_pins"].is<JsonObject>()) {
         cfg.gpio_pins.i2c_sda = doc["gpio_pins"]["i2c_sda"] | cfg.gpio_pins.i2c_sda;
@@ -124,6 +126,8 @@ void ConfigManager::configToJson(const AppConfig& cfg, JsonDocument& doc) {
     doc["ap_pass"] = cfg.ap_pass;
     doc["sensor_type"] = cfg.sensor_type;
     doc["follower_wait_sync_ms"] = cfg.follower_wait_sync_ms;
+    doc["report_mode"] = cfg.report_mode;
+    doc["report_interval_min"] = cfg.report_interval_min;
 
     JsonObject gp = doc["gpio_pins"].to<JsonObject>();
     gp["i2c_sda"] = cfg.gpio_pins.i2c_sda;

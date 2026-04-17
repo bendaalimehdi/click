@@ -13,7 +13,7 @@ public:
     bool begin();
 
     
-    void enqueueFromSensorData(const SensorData& packet, const uint8_t* mac);
+    bool enqueueFromSensorData(const SensorData& packet, const uint8_t* mac);
     bool enqueue(const QueuedCloudItem& item);
 
     bool peek(QueuedCloudItem& item);

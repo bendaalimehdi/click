@@ -24,6 +24,7 @@ private:
     uint8_t _numPixels;
 
     CRGB _leds[1];
+    CRGB _baseColor = CRGB::Black;
 
     bool _blinking = false;
     uint8_t _blinkRemaining = 0;
@@ -31,5 +32,6 @@ private:
     uint32_t _lastBlinkMs = 0;
     static constexpr uint32_t BLINK_INTERVAL_MS = 120;
 
-    void setColor(uint8_t r, uint8_t g, uint8_t b);
+    void applyColor(const CRGB& color);
+    void setBaseColor(const CRGB& color);
 };

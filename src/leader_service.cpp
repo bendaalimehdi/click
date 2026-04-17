@@ -159,7 +159,7 @@ void LeaderService::maintainWiFi() {
     if (_cfg.wifi_ssid.isEmpty()) return;
 
     if (WiFi.status() == WL_CONNECTED) {
-        // S'assurer que la LED est verte si on était déconnecté
+       _led.setGreen();
         return;
     }
 
@@ -226,7 +226,8 @@ void LeaderService::loop() {
             }
         }
     }
-
+    
+    flushPendingCloudPosts();
     retryQueuedCloudPosts();
     persistLeaderStateIfNeeded();
 }
@@ -268,19 +269,41 @@ void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& pac
     // Réponse de synchronisation pour le sommeil
     SyncData sync;
     sync.type = MSG_SYNC_DATA;
-    sync.next_sleep_seconds = _time.secondsUntilNextSlot(_cfg.report_times);
+    sync.next_sleep_seconds = _time.secondsUntilNextInterval(_cfg.report_interval_min);
     
     _espnow.sendSyncData(mac, sync);
 
     // Envoi au Cloud
-    if (!_cloud.postSensorData(packet, mac, _cfg.leader_mac, _cfg.device_name)) {
-        Logger::warn("Cloud failed, data queued");
-        _errors.setLastError(_cloud.getLastError());
-        
-        // CORRECTION ICI : Passez l'argument 'mac'
-        _queue.enqueueFromSensorData(packet, mac); 
-    } else {
-        _errors.clear();
+    PendingCloudSend item;
+    item.packet = packet;
+    memcpy(item.mac, mac, 6);
+    if (_pendingCloud.size() >= 20) {
+        Logger::warn("Pending cloud buffer full, queueing directly");
+        _queue.enqueueFromSensorData(packet, mac);
+        return;
+    }
+    _pendingCloud.push_back(item);
+    }
+
+void LeaderService::flushPendingCloudPosts() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (_pendingCloud.empty()) return;
+
+    for (auto it = _pendingCloud.begin(); it != _pendingCloud.end();) {
+        if (_cloud.postSensorData(it->packet, it->mac, _cfg.leader_mac, _cfg.device_name)) {
+            _errors.clear();
+            it = _pendingCloud.erase(it);
+        } else {
+            Logger::warn("Cloud immediate send failed, data queued");
+            _errors.setLastError(_cloud.getLastError());
+
+            if (!_queue.enqueueFromSensorData(it->packet, it->mac)) {
+                Logger::error("Queue enqueue failed: " + _queue.getLastError());
+                _errors.setLastError(_queue.getLastError());
+            }
+
+            it = _pendingCloud.erase(it);
+        }
     }
 }
 
