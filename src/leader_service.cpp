@@ -4,12 +4,40 @@
 #include "logger.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <esp_wifi.h>
+
+
 
 LeaderService::LeaderService(const AppConfig& cfg)
-    : _cfg(cfg), _cloud(cfg.server_url, _time), _queue(_time), _portal(80) {}
+    : _cfg(cfg),
+      _cloud(cfg.server_url, _time),
+      _queue(_time),
+      _portal(80),
+      _led() {}
 
 bool LeaderService::begin() {
+    _led.begin();
+    _led.setRed();
     setupWiFi();
+
+     uint32_t t = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t < 10000) {
+        delay(100);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        _led.setGreen();
+    }
+
+     // Sauvegarder le canal effectif dans la config
+    uint8_t channel = 1;
+    wifi_second_chan_t second;
+    esp_wifi_get_channel(&channel, &second);
+    
+    if (channel != _cfg.wifi_channel) {
+        Logger::info("Channel updated: " + String(channel));
+        _cfg.wifi_channel = channel;
+        saveConfig(_cfg); // persisté immédiatement
+    }
 
     if (!_queue.begin()) {
         Logger::error("Queue init failed: " + _queue.getLastError());
@@ -91,17 +119,24 @@ bool LeaderService::provisionNode(const String& targetMacStr, const String& node
         return false;
     }
 
+     // Lire le canal réel actif
+    uint8_t channel = 1;
+    wifi_second_chan_t second;
+    esp_wifi_get_channel(&channel, &second);
+    Logger::info("Provisioning on channel: " + String(channel));
+
     JsonDocument doc;
     doc["type"] = "provision";
     doc["leader_mac"] = WiFi.macAddress();
     doc["device_name"] = nodeName;
     doc["role"] = "follower";
-    doc["channel"] = 1;
+    doc["channel"] = channel;
 
     String payload;
     serializeJson(doc, payload);
 
-    _espnow.addPeer(targetMac);
+    _espnow.addPeer(targetMac, channel, false);
+
     bool ok = _espnow.sendRaw(
         targetMac,
         reinterpret_cast<const uint8_t*>(payload.c_str()),
@@ -121,13 +156,25 @@ bool LeaderService::provisionNode(const String& targetMacStr, const String& node
 
 void LeaderService::maintainWiFi() {
     const uint32_t retryIntervalMs = 15000;
-    if (_cfg.wifi_ssid.isEmpty() || WiFi.status() == WL_CONNECTED) return;
-    
+    if (_cfg.wifi_ssid.isEmpty()) return;
+
+    if (WiFi.status() == WL_CONNECTED) {
+        // S'assurer que la LED est verte si on était déconnecté
+        return;
+    }
+
+    _led.setRed(); // Perdu le WiFi → rouge
     if (millis() - _lastWiFiRetryMs < retryIntervalMs) return;
     _lastWiFiRetryMs = millis();
 
     Logger::warn("WiFi disconnected, reconnecting...");
     WiFi.begin(_cfg.wifi_ssid.c_str(), _cfg.wifi_pass.c_str());
+
+    // Vérifier après tentative
+    delay(500);
+    if (WiFi.status() == WL_CONNECTED) {
+        _led.setGreen();
+    }
 }
 
 void LeaderService::setupWiFi() {
@@ -163,6 +210,7 @@ void LeaderService::setupApPortal() {
 }
 
 void LeaderService::loop() {
+     _led.tick();
     maintainWiFi();
     
     // Nettoyage des nœuds expirés (24h)
@@ -184,6 +232,7 @@ void LeaderService::loop() {
 }
 
 void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& packet) {
+    _led.blinkBlue(4);
     String macStr = EspNowManager::macBytesToString(mac);
     Logger::info("Data from " + macStr + " id=" + String(packet.id) + " temp=" + String(packet.temp, 2));
 
@@ -207,11 +256,20 @@ void LeaderService::handleSensorPacket(const uint8_t* mac, const SensorData& pac
         _nodesDirty = true;
     }
 
+    // Lire le canal réel actif avant de répondre
+    uint8_t channel = 1;
+    wifi_second_chan_t second;
+    esp_wifi_get_channel(&channel, &second);
+    Logger::info("Sending SyncData on channel: " + String(channel));
+
+    // Ajouter/mettre à jour le peer sur le bon canal
+    _espnow.addPeer(mac, channel, false);
+
     // Réponse de synchronisation pour le sommeil
     SyncData sync;
     sync.type = MSG_SYNC_DATA;
     sync.next_sleep_seconds = _time.secondsUntilNextSlot(_cfg.report_times);
-    _espnow.addPeer(mac);
+    
     _espnow.sendSyncData(mac, sync);
 
     // Envoi au Cloud

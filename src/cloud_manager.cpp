@@ -17,10 +17,19 @@ bool CloudManager::postSensorData(const SensorData& data, const uint8_t* sensorM
     // 1. Générer le VRAI UUID à partir de la MAC du capteur
     String sMacStr = EspNowManager::macBytesToString(sensorMac);
     String sensorUuid = "";
-    for (char c : sMacStr) { if (c != ':') sensorUuid += c; } // Devrait donner ex: "80B54EC323AA"
+    for (char c : sMacStr) {
+        if (c != ':') sensorUuid += c;
+    }
+
+    String effectiveLeaderMac = leaderMac;
+    if (effectiveLeaderMac.isEmpty()) {
+        effectiveLeaderMac = WiFi.macAddress();
+    }
 
     String lUuid = "";
-    for (char c : leaderMac) { if (c != ':') lUuid += c; }
+    for (char c : effectiveLeaderMac) {
+        if (c != ':') lUuid += c;
+    }
 
     JsonDocument doc;
     doc["leader_uuid"] = lUuid;

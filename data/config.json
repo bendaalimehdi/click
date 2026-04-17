@@ -1,10 +1,11 @@
 {
   "role": "follower",
-  "id": 1,
+  "id": 2,
   "device_name": "follower-1",
-  "wifi_ssid": "BboxM",
-  "wifi_pass": "Midi2210@bbox",
-  "server_url": "http://192.168.1.119:5000/api/fridge",
+  "wifi_ssid": "Livebox-57C0",
+  "wifi_pass": "Designclic94270+",
+  "wifi_channel": 1,
+  "server_url": "http://192.168.1.22:5000/api/fridge",
   "leader_mac": "",
   "timezone": "CET-1CEST,M3.5.0/2,M10.5.0/3",
   "gpio_pins": {
@@ -16,7 +17,7 @@
     "10:00",
     "22:00"
   ],
-  "follower_wait_sync_ms": 500,
+  "follower_wait_sync_ms": 1000,
   "ap_ssid": "MANAGER_LEADER",
   "ap_pass": "12345678",
   "sensor_type": "bmp280",

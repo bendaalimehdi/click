@@ -24,6 +24,7 @@ struct AppConfig {
     String device_name = "NODE";
     String wifi_ssid;
     String wifi_pass;
+    uint8_t wifi_channel = 1;
     String server_url;
     String leader_mac;
     String timezone = "CET-1CEST,M3.5.0/2,M10.5.0/3";

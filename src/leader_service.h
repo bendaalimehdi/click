@@ -12,6 +12,7 @@
 #include "cloud_queue_manager.h"
 #include "leader_state_manager.h"
 #include "error_tracker.h"
+#include <led_manager.h>
 
 class LeaderService {
 public:
@@ -29,6 +30,12 @@ public:
     // Actions de configuration
     bool saveConfig(const AppConfig& cfg);
     void maintainWiFi();
+
+
+   
+
+    
+
 
 private:
     AppConfig _cfg;
@@ -58,6 +65,8 @@ private:
     // Initialisation
     void setupWiFi();
     void setupApPortal();
+    uint8_t scanForLeaderChannel(const String& apSsid);
+    LedManager _led;
 
     // Gestionnaires de paquets
     void handleSensorPacket(const uint8_t* mac, const SensorData& packet);
@@ -68,4 +77,5 @@ private:
     void retryQueuedCloudPosts();
     void persistLeaderStateIfNeeded();
     void cleanupDiscovery();
+
 };

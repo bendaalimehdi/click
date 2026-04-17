@@ -68,6 +68,7 @@ bool ConfigManager::applyJsonToConfig(const JsonDocument& doc, AppConfig& cfg) {
     cfg.device_name = String((const char*)(doc["device_name"] | cfg.device_name.c_str()));
     cfg.wifi_ssid = String((const char*)(doc["wifi_ssid"] | ""));
     cfg.wifi_pass = String((const char*)(doc["wifi_pass"] | ""));
+    cfg.wifi_channel = doc["wifi_channel"] | cfg.wifi_channel;
     cfg.server_url = String((const char*)(doc["server_url"] | ""));
     cfg.leader_mac = String((const char*)(doc["leader_mac"] | ""));
     cfg.timezone = String((const char*)(doc["timezone"] | cfg.timezone.c_str()));
@@ -115,6 +116,7 @@ void ConfigManager::configToJson(const AppConfig& cfg, JsonDocument& doc) {
     doc["device_name"] = cfg.device_name;
     doc["wifi_ssid"] = cfg.wifi_ssid;
     doc["wifi_pass"] = cfg.wifi_pass;
+    doc["wifi_channel"] = cfg.wifi_channel;
     doc["server_url"] = cfg.server_url;
     doc["leader_mac"] = cfg.leader_mac;
     doc["timezone"] = cfg.timezone;

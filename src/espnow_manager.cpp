@@ -28,7 +28,8 @@ bool EspNowManager::sendRaw(const uint8_t* peer_mac, const uint8_t* data, size_t
 
 bool EspNowManager::addPeer(const uint8_t* mac, uint8_t channel, bool encrypt) {
     if (esp_now_is_peer_exist(mac)) {
-        return true;
+        
+        esp_now_del_peer(mac);
     }
 
     esp_now_peer_info_t peerInfo = {};
